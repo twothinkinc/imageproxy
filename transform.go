@@ -75,6 +75,11 @@ func Transform(img []byte, opt Options) ([]byte, error) {
 		format = "jpeg"
 	}
 
+	if opt.Format == "svg" && opt.Primitive.Count == 0 {
+		// svg output only supported with primitive transform
+		opt.Format = ""
+	}
+
 	if opt.Format != "" {
 		format = opt.Format
 	}
@@ -119,6 +124,12 @@ func Transform(img []byte, opt Options) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "svg":
+		o := opt // copy
+		o.Primitive.Count = 0
+		m = transformImage(m, o)
+		model := transformPrimitive(m, opt)
+		buf.WriteString(model.SVG())
 	default:
 		return nil, fmt.Errorf("unsupported format: %v", format)
 	}
