@@ -11,7 +11,10 @@ require (
 	github.com/die-net/lrucache v0.0.0-20181227122439-19a39ef22a11
 	github.com/disintegration/imaging v1.6.0
 	github.com/dnaeon/go-vcr v1.0.1 // indirect
+	github.com/fogleman/gg v1.3.0 // indirect
+	github.com/fogleman/primitive v0.0.0-20190214200932-673f57e7b1b5
 	github.com/garyburd/redigo v1.6.0
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/gomodule/redigo v2.0.0+incompatible // indirect
 	github.com/google/btree v1.0.0 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190212212710-3befbb6ad0cc
