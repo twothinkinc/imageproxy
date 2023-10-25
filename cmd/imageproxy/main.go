@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/PaulARoy/azurestoragecache"
 	"github.com/die-net/lrucache"
 	"github.com/die-net/lrucache/twotier"
@@ -23,10 +24,10 @@ import (
 	"github.com/gregjones/httpcache/diskcache"
 	rediscache "github.com/gregjones/httpcache/redis"
 	"github.com/peterbourgon/diskv"
-	"willnorris.com/go/imageproxy"
-	"willnorris.com/go/imageproxy/internal/gcscache"
-	"willnorris.com/go/imageproxy/internal/s3cache"
-	"willnorris.com/go/imageproxy/third_party/envy"
+	"github.com/twothinkinc/imageproxy"
+	"github.com/twothinkinc/imageproxy/internal/gcscache"
+	"github.com/twothinkinc/imageproxy/internal/s3cache"
+	"github.com/twothinkinc/imageproxy/third_party/envy"
 )
 
 const defaultMemorySize = 100
@@ -47,6 +48,7 @@ var verbose = flag.Bool("verbose", false, "print verbose logging messages")
 var _ = flag.Bool("version", false, "Deprecated: this flag does nothing")
 var contentTypes = flag.String("contentTypes", "image/*", "comma separated list of allowed content types")
 var userAgent = flag.String("userAgent", "willnorris/imageproxy", "specify the user-agent used by imageproxy when fetching images from origin website")
+var statsdAddr = flag.String("statsdAddr", "127.0.0.1:8125", "address of statsd server to send metrics to")
 
 func init() {
 	flag.Var(&cache, "cache", "location to cache images (see https://github.com/willnorris/imageproxy#cache)")
@@ -91,6 +93,19 @@ func main() {
 
 	r := mux.NewRouter().SkipClean(true).UseEncodedPath()
 	r.PathPrefix("/").Handler(p)
+
+	// Set up statsd if needed
+	p.StatsdAddr = *statsdAddr
+	if p.StatsdAddr != "" {
+		statsd, err := statsd.New(p.StatsdAddr)
+		if err != nil {
+			log.Fatalf("error setting up datadog statsd: %v", err)
+		}
+		p.StatsdClient = statsd
+		if p.Verbose {
+			fmt.Printf("datadog statsd client set to %s\n", p.StatsdAddr)
+		}
+	}
 
 	server := &http.Server{
 		Addr:    *addr,

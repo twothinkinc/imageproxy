@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	cloud.google.com/go/storage v1.31.0
+	github.com/DataDog/datadog-go/v5 v5.3.0
 	github.com/PaulARoy/azurestoragecache v0.0.0-20170906084534-3c249a3ba788
 	github.com/aws/aws-sdk-go v1.44.314
 	github.com/die-net/lrucache v0.0.0-20220628165024-20a71bc65bf1
@@ -33,6 +34,7 @@ require (
 	github.com/Azure/go-autorest/autorest/to v0.4.0 // indirect
 	github.com/Azure/go-autorest/logger v0.2.1 // indirect
 	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
+	github.com/Microsoft/go-winio v0.5.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/dnaeon/go-vcr v1.2.0 // indirect

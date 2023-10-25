@@ -27,6 +27,9 @@ import (
 	"github.com/gregjones/httpcache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/DataDog/datadog-go/v5/statsd"
+
 	tphttp "willnorris.com/go/imageproxy/third_party/http"
 )
 
@@ -88,6 +91,15 @@ type Proxy struct {
 	// The User-Agent used by imageproxy when requesting origin image
 	UserAgent string
 
+	// The location of the statsd server to log to
+	StatsdAddr string
+
+	// The current statsd client
+	StatsdClient statsd.ClientInterface
+
+	// Statsd tags
+	StatsdTags []string
+
 	// PassRequestHeaders identifies HTTP headers to pass from inbound
 	// requests to the proxied server.
 	PassRequestHeaders []string
@@ -130,6 +142,12 @@ func NewProxy(transport http.RoundTripper, cache Cache) *Proxy {
 
 // ServeHTTP handles incoming requests.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// we want this first so we can determine abuse and graph it needed
+	p.StatsdIncrement("imageproxy.requests.total")
+
+	reqStartTime := time.Now()
+	defer p.StatsdTiming("imageproxy.requests.duration", reqStartTime, 1)
+
 	if r.URL.Path == "/favicon.ico" {
 		return // ignore favicon requests
 	}
@@ -148,26 +166,31 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var h http.Handler = http.HandlerFunc(p.serveImage)
 	if p.Timeout > 0 {
 		h = tphttp.TimeoutHandler(h, p.Timeout, "Gateway timeout waiting for remote resource.")
+		p.StatsdIncrement("imageproxy.errors.timeout")
 	}
 
 	timer := prometheus.NewTimer(metricRequestDuration)
 	defer timer.ObserveDuration()
 	h.ServeHTTP(w, r)
+
 }
 
 // serveImage handles incoming requests for proxied images.
 func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	req, err := NewRequest(r, p.DefaultBaseURL)
+
 	if err != nil {
 		msg := fmt.Sprintf("invalid request URL: %v", err)
 		p.log(msg)
 		http.Error(w, msg, http.StatusBadRequest)
+		p.StatsdIncrement("imageproxy.errors.bad_requests")
 		return
 	}
 
 	if err := p.allowed(req); err != nil {
 		p.logf("%s: %v", err, req)
 		http.Error(w, msgNotAllowed, http.StatusForbidden)
+		p.StatsdIncrement("imageproxy.errors.forbidden")
 		return
 	}
 
@@ -211,15 +234,20 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := p.Client.Do(actualReq)
 
+	// jna: patch from https://github.com/willnorris/imageproxy/issues/316
+	// close the original resp.Body, even if we wrap it in a NopCloser below
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+
 	if err != nil {
 		msg := fmt.Sprintf("error fetching remote image: %v", err)
 		p.log(msg)
 		http.Error(w, msg, http.StatusInternalServerError)
+		p.StatsdIncrement("imageproxy.errors.remote_fetch")
 		metricRemoteErrors.Inc()
 		return
 	}
-	// close the original resp.Body, even if we wrap it in a NopCloser below
-	defer resp.Body.Close()
 
 	// return early on 404s.  Perhaps handle additional status codes here?
 	if resp.StatusCode == http.StatusNotFound {
@@ -233,7 +261,10 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cached {
+		p.StatsdIncrement("imageproxy.requests.cache_hit")
 		metricServedFromCache.Inc()
+	} else {
+		p.StatsdIncrement("imageproxy.requests.cache_miss")
 	}
 
 	copyHeader(w.Header(), resp.Header, "Cache-Control", "Last-Modified", "Expires", "Etag", "Link")
@@ -252,6 +283,7 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	}
 	if resp.ContentLength != 0 && !contentTypeMatches(p.ContentTypes, contentType) {
 		p.logf("content-type not allowed: %q", contentType)
+		p.StatsdIncrement("imageproxy.errors.mimetype_forbidden")
 		http.Error(w, msgNotAllowed, http.StatusForbidden)
 		return
 	}
@@ -273,6 +305,7 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
+		p.StatsdIncrement("imageproxy.errors.copy_response")
 		p.logf("error copying response: %v", err)
 	}
 }
@@ -313,10 +346,12 @@ var (
 // allowed.
 func (p *Proxy) allowed(r *Request) error {
 	if len(p.Referrers) > 0 && !referrerMatches(p.Referrers, r.Original) {
+		p.StatsdIncrement("imageproxy.errors.disallowed_referrer")
 		return errReferrer
 	}
 
 	if hostMatches(p.DenyHosts, r.URL) {
+		p.StatsdIncrement("imageproxy.errors.denied_host")
 		return errDeniedHost
 	}
 
@@ -334,6 +369,7 @@ func (p *Proxy) allowed(r *Request) error {
 		}
 	}
 
+	p.StatsdIncrement("imageproxy.errors.forbidden")
 	return errNotAllowed
 }
 
@@ -500,6 +536,10 @@ func (t *TransformingTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if should304(req, resp) {
 		// bare 304 response, full response will be used from cache
 		return &http.Response{StatusCode: http.StatusNotModified}, nil
+	}
+
+	if resp.StatusCode > 299 {
+		return nil, fmt.Errorf("invalid http code %s: %s", req.URL.String(), resp.Status)
 	}
 
 	b, err := io.ReadAll(resp.Body)
